@@ -4,6 +4,8 @@
         "memlayout.h": "c",
         "elf.h": "c",
         "fs.h": "c",
-        "cmath": "c"
+        "cmath": "c",
+        "spinlock.h": "c",
+        "stdarg.h": "c"
     }
 }

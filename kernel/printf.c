@@ -23,7 +23,7 @@ static struct {
   int locking;
 } pr;
 
-static char digits[] = "0123456789abcdef";
+static char digits[] = "0123456789abcdef";  
 
 static void
 printint(long long xx, int base, int sign)
