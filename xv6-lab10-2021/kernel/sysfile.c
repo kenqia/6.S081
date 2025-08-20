@@ -484,3 +484,155 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  struct proc *p = myproc();
+  struct file *f = 0;
+  int index;
+  int length, prot, flags, fd;
+  if((argint(1, &length) < 0) || (argint(2, &prot) < 0) || (argint(3, &flags) < 0) || (argint(4, &fd) < 0)){
+    return 0xffffffffffffffff;
+  }
+
+  if (fd < 0 || fd >= NOFILE) {
+    return 0xffffffffffffffff;
+  }
+
+  if(fd >= 0){
+    f = p->ofile[fd];
+    if(f == 0)
+        return 0xffffffffffffffff;
+    filedup(f);
+  }
+
+  if ((prot & PROT_READ) && !f->readable) {
+    return 0xffffffffffffffff;
+  }
+
+  if ((prot & PROT_WRITE) && !f->writable && flags == MAP_SHARED) {  
+    return 0xffffffffffffffff;
+  }
+
+  for(index = 0 ; index < VMALEN ; index++){
+    if(p->vma_info[index].orgin_start == 0){
+      break;
+    }
+  }
+
+  if(index == VMALEN){
+    return 0xffffffffffffffff;
+  }
+
+  p->vma_info[index].f = f;
+  p->vma_info[index].file_size = f->ip->size;
+  length = PGROUNDUP(length);
+
+  p->vma -= length;
+  p->vma_info[index].start = p->vma;
+  p->vma_info[index].orgin_start = p->vma;
+  p->vma_info[index].length = (unsigned int)length;
+  p->vma_info[index].prot = prot;
+  p->vma_info[index].flags = flags;
+
+  return p->vma;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr, npages, start, end;
+  int length, index, start_flag;
+  struct proc *p = myproc();
+  pte_t *pte;
+  struct file *f;
+  
+  argaddr(0, &addr);
+  argint(1, &length);
+
+  for(index = 0 ; index < VMALEN ; index++){
+    if(p->vma_info[index].start != 0 && addr >= p->vma_info[index].start && addr < PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+      break;
+    }
+  }
+
+  if(index == VMALEN){
+    return -1;
+  }
+
+  start = PGROUNDDOWN(addr);
+  end = PGROUNDUP(addr + length);
+
+
+  if(end < p->vma_info[index].start || end > PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+    return -1;
+  }
+  
+  if(start == p->vma_info[index].start){
+    start_flag = 1;
+  }else if(end == PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+    start_flag = 0;
+  }else{
+    return -1;
+  }
+
+  npages = (end - start) / PGSIZE;
+  f = p->vma_info[index].f;
+
+  
+  for(int i = 0 ; i < npages ; i++){
+    if(((pte = walk(p->pagetable, start + i * PGSIZE, 0)) != 0) && (*pte & PTE_V) != 0){
+      if(p->vma_info[index].flags & MAP_SHARED){
+        int j = 0, off = start + i * PGSIZE + j - p->vma_info[index].orgin_start;
+        int r, n = PGSIZE < p->vma_info[index].file_size - off ? PGSIZE : p->vma_info[index].file_size - off;
+        int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+        while(n > 0 && j < n){
+          int n1 = n - j;
+          if(n1 > max)
+            n1 = max;
+          off = start + i * PGSIZE + j - p->vma_info[index].orgin_start;
+          if(off == p->vma_info[index].file_size){
+            j = n - 1;
+            n1 = 1;
+          }
+          if(off > p->vma_info[index].file_size){
+            iunlock(f->ip);
+            end_op();
+            break;
+          }
+          begin_op();
+          ilock(f->ip);
+          if ((r = writei(f->ip, 1, start + i * PGSIZE + j, off, n1)) <= 0){
+            panic("error wtf");
+          }
+          iunlock(f->ip);
+          end_op();
+
+          if(r != n1){
+            break;
+          }
+          j += r;
+        }
+      }
+      
+      uvmunmap(p->pagetable, start + i * PGSIZE, 1, 1);
+    }
+  }
+
+  p->vma_info[index].length -= (end - start);
+  if(start_flag == 1){
+    p->vma_info[index].start = end;
+  }else{
+
+  }
+      
+  if(p->vma_info[index].length <= 0){
+    fileclose(p->vma_info[index].f);
+    p->vma_info[index].orgin_start = 0;
+    p->vma_info[index].start = 0;
+    p->vma_info[index].f = 0;
+  }
+
+  return 0;
+}

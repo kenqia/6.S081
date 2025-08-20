@@ -18,6 +18,16 @@ struct context {
   uint64 s11;
 };
 
+struct vma_info{
+  uint64 start;
+  uint64 orgin_start;
+  unsigned int length;
+  int prot;
+  int flags;
+  struct file *f;
+  uint file_size;
+};
+
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
@@ -81,6 +91,7 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+#define VMALEN 16
 
 // Per-process state
 struct proc {
@@ -98,6 +109,8 @@ struct proc {
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
+  uint64 vma;                  // Start of mmapping
+  struct vma_info vma_info[VMALEN];// Store infomation of vma;
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S

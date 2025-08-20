@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "*.c": "c",
+        "fcntl.h": "c",
+        "file.h": "c",
+        "defs.h": "c",
+        "cmath": "c",
+        "type_traits": "c",
+        "syscall.h": "c",
+        "memlayout.h": "c"
+    }
+}

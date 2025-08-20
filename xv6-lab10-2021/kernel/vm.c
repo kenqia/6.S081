@@ -5,6 +5,21 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "fcntl.h"
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
+
 
 /*
  * the kernel's page table.
@@ -431,4 +446,101 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+int
+do_munmap(uint64 addr, uint length)
+{
+  uint64 npages, start, end;
+  int index, start_flag;
+  struct proc *p = myproc();
+  pte_t *pte;
+  struct file *f;
+  
+
+  for(index = 0 ; index < VMALEN ; index++){
+    if(p->vma_info[index].start != 0 && addr >= p->vma_info[index].start && addr < PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+      break;
+    }
+  }
+
+  if(index == VMALEN){
+    return -1;
+  }
+
+  start = PGROUNDDOWN(addr);
+  end = PGROUNDUP(addr + length);
+
+
+  if(end < p->vma_info[index].start || end > PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+    return -1;
+  }
+  
+  if(start == p->vma_info[index].start){
+    start_flag = 1;
+  }else if(end == PGROUNDUP(p->vma_info[index].start + p->vma_info[index].length)){
+    start_flag = 0;
+  }else{
+    return -1;
+  }
+
+  npages = (end - start) / PGSIZE;
+  f = p->vma_info[index].f;
+
+  
+  for(int i = 0 ; i < npages ; i++){
+    if(((pte = walk(p->pagetable, start + i * PGSIZE, 0)) != 0) && (*pte & PTE_V) != 0){
+      if(p->vma_info[index].flags & MAP_SHARED){
+        int j = 0, off = start + i * PGSIZE + j - p->vma_info[index].orgin_start;
+        int r, n = PGSIZE < p->vma_info[index].file_size - off ? PGSIZE : p->vma_info[index].file_size - off;
+        int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+        while(n > 0 && j < n){
+          int n1 = n - j;
+          if(n1 > max)
+            n1 = max;
+          off = start + i * PGSIZE + j - p->vma_info[index].orgin_start;
+          if(off == p->vma_info[index].file_size){
+            j = n - 1;
+            n1 = 1;
+          }
+          if(off > p->vma_info[index].file_size){
+            iunlock(f->ip);
+            end_op();
+            break;
+          }
+          begin_op();
+          ilock(f->ip);
+          if ((r = writei(f->ip, 1, start + i * PGSIZE + j, off, n1)) <= 0){
+            panic("error wtf");
+          }
+          iunlock(f->ip);
+          end_op();
+
+          if(r != n1){
+            break;
+          }
+          j += r;
+        }
+      }
+      
+      uvmunmap(p->pagetable, start + i * PGSIZE, 1, 1);
+    }
+  }
+
+  p->vma_info[index].length -= (end - start);
+  if(start_flag == 1){
+    p->vma_info[index].start = end;
+  }else{
+
+  }
+      
+  if(p->vma_info[index].length <= 0){
+    fileclose(p->vma_info[index].f);
+    p->vma_info[index].orgin_start = 0;
+    p->vma_info[index].start = 0;
+    p->vma_info[index].f = 0;
+  }
+
+  return 0;
 }

@@ -53,6 +53,12 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
+      p->vma = MMAP;
+      for(int i = 0 ; i < VMALEN ; i++){
+        p->vma_info[i].orgin_start = 0;
+        p->vma_info[i].start = 0;
+        p->vma_info[i].f = 0;
+      }
   }
 }
 
@@ -303,6 +309,13 @@ fork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->vma = p->vma;
+  for(int i = 0 ; i < VMALEN; i++){
+    np->vma_info[i] = p->vma_info[i];
+    if(p->vma_info[i].f != 0)
+    filedup(p->vma_info[i].f);
+  }
+
   pid = np->pid;
 
   release(&np->lock);
@@ -343,6 +356,12 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  for(int i = 0 ; i < VMALEN ; i++){
+    if(p->vma_info[i].start != 0){
+      do_munmap(p->vma_info[i].start, p->vma_info[i].length);
+    }
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

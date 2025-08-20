@@ -5,11 +5,25 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[], userret[];
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
+
+int vma_handler();
 
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
@@ -67,7 +81,16 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if((r_scause() == 13) || (r_scause() == 15)){
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    if((r_stval() < 0 && r_stval() >= MMAP)){
+      p->killed = 1;
+    }
+    if(vma_handler() < 0){
+      p->killed = 1;
+    }
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
@@ -218,3 +241,61 @@ devintr()
   }
 }
 
+int vma_handler(){
+  uint64 va = r_stval(), addr = PGROUNDDOWN(va);
+  struct proc *p = myproc();
+  int index, offset;
+  // int cnt;
+  int flag = 0;
+  struct file *file;
+  char *mem;
+
+  for(index = 0 ; index < VMALEN ; index++){
+    if(p->vma_info[index].start != 0 && va >= p->vma_info[index].start && va < p->vma_info[index].start + p->vma_info[index].length){
+      break;
+    }
+  }
+  
+  if(index == VMALEN){
+    return -1;
+  }
+
+  file = p->vma_info[index].f;
+  offset = addr - p->vma_info[index].orgin_start;
+  // cnt = PGSIZE < (p->vma_info[index].length - offset)? PGSIZE:(p->vma_info[index].length - offset);
+
+  if((p->vma_info[index].prot | PROT_NONE) == 0){
+    flag = 0;
+  }else{
+    if((p->vma_info[index].prot & PROT_READ)){
+    flag |= PTE_R;
+    }
+    if((p->vma_info[index].prot & PROT_WRITE)){
+      flag |= PTE_W;
+      flag |= PTE_R;
+    }
+    if((p->vma_info[index].prot & PROT_EXEC)){
+      flag |= PTE_X;
+    }
+  }
+  flag |= PTE_U;
+  
+  if((mem = kalloc()) == 0){
+    return -1;
+  }
+  memset(mem, 0, PGSIZE);
+
+  ilock(file->ip);
+  if(readi(file->ip, 0, (uint64)mem, offset, PGSIZE) < 0){
+    iunlock(file->ip);
+    panic("eeeee");
+    return -1;
+  }
+  iunlock(file->ip);
+
+  if((mappages(p->pagetable, addr, PGSIZE, (uint64)mem, flag)) < 0){
+    kfree((void*)mem);
+    return -1;
+  }
+  return 0;
+}
